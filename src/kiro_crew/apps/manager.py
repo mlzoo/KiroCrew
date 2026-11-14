@@ -318,6 +318,7 @@ if TYPE_CHECKING:  # names it serves from outside the family, from their homes
 
     from kiro_crew import (  # noqa: F401
         member_records,
+        pinned_fs,
         platform_compat,
     )
     from kiro_crew.apps import (  # noqa: F401

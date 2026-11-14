@@ -293,7 +293,7 @@ async def handle_update_app(request: web.Request) -> web.Response:
 
     # Per-app lifecycle lock: the stop → deregister → copy → re-register
     # sequence must not interleave with another update/install/uninstall of
-    # the same app — update_app moves user data through a shared
+    # the same app — install and uninstall move user data through a shared
     # ``.{name}-data-tmp`` path, so an interleaving can destroy it.
     # (The registry branch above holds the same lock around the same sequence.)
     async with app_lifecycle_lock(name):
