@@ -35,14 +35,20 @@ def _harness_of(provider: Any, backend: str) -> tuple[str, bool]:
     return provider_label_for_backend(backend), backend == ACP_BACKEND_KAS
 
 
-def _resolved_agent(slot: Any, session_key: str, project: str | None) -> str | None:
-    """The template this chat's turns run on, resolved as turn admission resolves it.
+def _resolved_agent(slot: Any, session_key: str, project: str | None) -> tuple[str | None, bool]:
+    """``(agent, crewmate)``: the template this chat's turns run on, resolved as turn
+    admission resolves it, and whether those turns carry a crewmate's essentials envelope.
 
     ``turn_admission`` passes ``bindings.kiro_agent`` to the context builder, so the
     steering load's default-agent gate and the kiro-cli resources read judge that name,
-    not the slot's raw pick (an alias, or empty for the configured default).
+    not the slot's raw pick (an alias, or empty for the configured default). The
+    envelope follows the turn's owner, which ``resolve_turn_owner`` reads from the
+    execution record (before one exists, the crewmate the chat picks), not the slot's
+    mode, and ``turn_message`` builds it when ``member_context_identity`` names one.
     """
     from kiro_crew.config.loader import KiroCrewConfig, resolve_agent_bindings
+    from kiro_crew.member_essential_context import member_context_identity
+    from kiro_crew.memory_stores import UnknownMemoryStore
     from kiro_crew.session_agent_selection import resolve_session_agent_bindings
 
     bindings = resolve_session_agent_bindings(
@@ -53,7 +59,21 @@ def _resolved_agent(slot: Any, session_key: str, project: str | None) -> str | N
         project,
         agent_kind=slot.agent_kind,
     )
-    return bindings.kiro_agent or slot.agent or None
+    record: Any = bindings.execution_context  # typed as resolve_turn_owner takes it
+    if record is not None:
+        member = record.member_id or (
+            record.selection_name if record.selection_kind == "member" else ""
+        )
+        member_is_id = bool(record.member_id)
+    else:
+        member = bindings.resolved_alias if bindings.selection_kind == "member" else ""
+        member_is_id = False
+    try:
+        crewmate = bool(member_context_identity(member, member_is_id=member_is_id)[0])
+    except UnknownMemoryStore:
+        # A crewmate since removed: the turn raises the same error, so nothing is sent.
+        crewmate = True
+    return bindings.kiro_agent or slot.agent or None, crewmate
 
 
 #: Default of ``_plan_blocking``'s *binding_project*: the same as *project*.
@@ -87,12 +107,16 @@ def _plan_blocking(
     from kiro_crew.steering_off import steering_off_for
     from kiro_crew.steering_plan import chat_steering_plan
 
-    # The member identity the context builder receives (``prompt_assembly``'s
-    # ``member=``): a member chat's envelope decides its steering.
+    # A crewmate's essentials envelope decides the steering of every chat whose turns
+    # carry it: its DM (``prompt_assembly``'s ``member=``), and any chat a crewmate owns.
     is_member = slot.mode == "member" and bool(slot.agent)
     if binding_project is _SAME_PROJECT:
         binding_project = project
-    agent = None if is_member else _resolved_agent(slot, session_key, binding_project)
+    agent = None
+    if not is_member:
+        agent, is_member = _resolved_agent(slot, session_key, binding_project)
+        if is_member:
+            agent = None
     listed = list_steering_blocking(Path(project) if project else None)["files"]
     steering_off = steering_off_for(session_key)
     folder: list[str] = []
